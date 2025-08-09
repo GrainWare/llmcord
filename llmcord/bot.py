@@ -33,8 +33,7 @@ curr_model = next(iter(config["models"]))
 msg_nodes: dict[int, MsgNode] = {}
 
 # Discord bot setup
-intents = discord.Intents.default()
-intents.message_content = True
+intents = discord.Intents.all()
 activity = discord.CustomActivity(
     name=(config["status_message"] or "github.com/GrainWare/llmcord")[:128]
 )
@@ -155,6 +154,7 @@ async def on_message(new_msg: discord.Message) -> None:
         bot_user=discord_bot.user,
         accept_images=accept_images,
         accept_usernames=accept_usernames,
+        experimental_message_formatting=cfg.get("experimental_message_formatting", False),
         max_text=max_text,
         max_images=max_images,
         max_messages=max_messages,
@@ -167,7 +167,16 @@ async def on_message(new_msg: discord.Message) -> None:
     )
 
     if system_prompt := format_system_prompt(
-        cfg.get("system_prompt", ""), accept_usernames
+        cfg.get("system_prompt", ""),
+        accept_usernames=accept_usernames,
+        users_listing=(
+            "\n".join(
+                [
+                    f"username: {member.name}, nickname: {member.display_name}, mention: <@{member.id}>"
+                    for member in (new_msg.guild.members if new_msg.guild else [])
+                ]
+            )
+        ),
     ):
         messages.append(dict(role="system", content=system_prompt))
 

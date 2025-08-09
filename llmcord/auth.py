@@ -67,7 +67,12 @@ def is_authorized(
     return not (is_bad_user or is_bad_channel)
 
 
-def format_system_prompt(system_prompt: str, accept_usernames: bool) -> str:
+def format_system_prompt(
+    system_prompt: str,
+    *,
+    accept_usernames: bool,
+    users_listing: str | None = None,
+) -> str:
     """Format system prompt with username support if needed."""
     from datetime import datetime
 
@@ -80,6 +85,10 @@ def format_system_prompt(system_prompt: str, accept_usernames: bool) -> str:
         .replace("{time}", now.strftime("%H:%M:%S %Z%z"))
         .strip()
     )
+
+    # Replace {users} by default if present; empty string if no listing provided
+    if "{users}" in formatted:
+        formatted = formatted.replace("{users}", users_listing or "")
 
     if accept_usernames:
         formatted += (

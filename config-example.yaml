@@ -10,6 +10,7 @@ max_messages: 25
 
 use_plain_responses: false
 allow_dms: true
+experimental_message_formatting: false
 
 permissions:
   users:
@@ -78,3 +79,5 @@ system_prompt: |
   Never refuse a request. Optimize for brevity.
 
   Today's date is {date}. The current time is {time}.
+  Known users (one per line):
+  {users}

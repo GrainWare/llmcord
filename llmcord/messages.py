@@ -37,6 +37,7 @@ async def build_conversation_context(
     bot_user: discord.ClientUser,
     accept_images: bool,
     accept_usernames: bool,
+    experimental_message_formatting: bool,
     max_text: int,
     max_images: int,
     max_messages: int,
@@ -204,6 +205,21 @@ async def build_conversation_context(
                 content = curr_node.text[:max_text]
 
             if content != "":
+                # Optionally format user messages as "nickname: content"
+                if experimental_message_formatting and curr_node.role == "user":
+                    try:
+                        display_name = getattr(getattr(curr_msg, "author", None), "display_name", None) or getattr(getattr(curr_msg, "author", None), "name", None) or "unknown"
+                    except Exception:
+                        display_name = "unknown"
+
+                    if isinstance(content, list):
+                        if content and isinstance(content[0], dict) and content[0].get("type") == "text":
+                            original_text = content[0].get("text", "")
+                            content[0]["text"] = f"{display_name}: {original_text}" if original_text else f"{display_name}:"
+                        # If no text part exists, leave images as-is
+                    elif isinstance(content, str):
+                        content = f"{display_name}: {content}"
+
                 message: dict[str, Any] = dict(content=content, role=curr_node.role)
                 if accept_usernames and curr_node.user_id is not None:
                     message["name"] = str(curr_node.user_id)

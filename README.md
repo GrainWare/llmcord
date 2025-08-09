@@ -94,7 +94,7 @@ This project is a refactor and extension of the original `llmcord`. Major differ
 
 | Setting | Description |
 | --- | --- |
-| **bot_token** | Create a new Discord bot at [discord.com/developers/applications](https://discord.com/developers/applications) and generate a token under the "Bot" tab. Also enable "MESSAGE CONTENT INTENT". |
+| **bot_token** | Create a new Discord bot at [discord.com/developers/applications](https://discord.com/developers/applications) and generate a token under the "Bot" tab. Enable "MESSAGE CONTENT INTENT". If you plan to use the `{users}` placeholder in your system prompt (recommended), also enable the "SERVER MEMBERS INTENT" so the bot can list server members. |
 | **client_id** | Found under the "OAuth2" tab of the Discord bot you just made. |
 | **status_message** | Set a custom message that displays on the bot's Discord profile.<br /><br />**Max 128 characters.** |
 | **max_text** | The maximum amount of text allowed in a single message, including text from file attachments. (Default: `100,000`) |
@@ -102,6 +102,7 @@ This project is a refactor and extension of the original `llmcord`. Major differ
 | **max_messages** | The maximum number of messages allowed in a reply chain. When exceeded, the oldest messages are dropped. (Default: `25`) |
 | **use_plain_responses** | When set to `true` the bot will use plaintext responses instead of embeds. Plaintext responses have a shorter character limit so the bot's messages may split more often. (Default: `false`)<br /><br />**Also disables streamed responses and warning messages.** |
 | **allow_dms** | Set to `false` to disable direct message access. (Default: `true`) |
+| **experimental_message_formatting** | When `true`, user messages sent to the model are prefixed with the sender's Discord display name (e.g., `nickname: message`). This can help models track multi-user conversations. This may break some models, so it's disabled by default. (Default: `false`) |
 | **permissions** | Configure access permissions for `users`, `roles` and `channels`, each with a list of `allowed_ids` and `blocked_ids`.<br /><br />Control which `users` are admins with `admin_ids`. Admins can change the model with `/model` and DM the bot even if `allow_dms` is `false`.<br /><br />**Leave `allowed_ids` empty to allow ALL in that category.**<br /><br />**Role and channel permissions do not affect DMs.**<br /><br />**You can use [category](https://support.discord.com/hc/en-us/articles/115001580171-Channel-Categories-101) IDs to control channel permissions in groups.** |
 
 ### LLM settings
@@ -110,7 +111,7 @@ This project is a refactor and extension of the original `llmcord`. Major differ
 | --- | --- |
 | **providers** | Add the LLM providers you want to use, each with a `base_url` and optional `api_key` entry. Popular providers (`openai`, `ollama`, etc.) are already included.<br /><br />**Only supports OpenAI compatible APIs.**<br /><br />**Some providers may need `extra_headers` / `extra_query` / `extra_body` entries for extra HTTP data. See the included `azure-openai` provider for an example.** |
 | **models** | Add the models you want to use in `<provider>/<model>: <parameters>` format (examples are included). When you run `/model` these models will show up as autocomplete suggestions.<br /><br />**Refer to each provider's documentation for supported parameters.**<br /><br />**The first model in your `models` list will be the default model at startup.**<br /><br />**Some vision models may need `:vision` added to the end of their name to enable image support.** |
-| **system_prompt** | Write anything you want to customize the bot's behavior!<br /><br />**Leave blank for no system prompt.**<br /><br />**You can use the `{date}` and `{time}` tags in your system prompt to insert the current date and time, based on your host computer's time zone.** |
+| **system_prompt** | Write anything you want to customize the bot's behavior!<br /><br />**Leave blank for no system prompt.**<br /><br />You can use placeholders:<br />- `{date}` and `{time}` insert the current date/time (based on your host's time zone).<br />- `{users}` expands to a newline-separated list of known server members in the format `username: <username>, nickname: <nickname>, mention: <@id>`. This is populated automatically when messages come from a guild. |
 
 3. Install the dependencies:
 
