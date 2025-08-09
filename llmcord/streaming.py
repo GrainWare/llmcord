@@ -1,0 +1,303 @@
+from __future__ import annotations
+
+import time
+from typing import Any
+
+import discord
+from openai import AsyncOpenAI
+from openai.types.chat import ChatCompletionMessageParam
+
+from .constants import (
+    EMBED_COLOR_COMPLETE,
+    EMBED_COLOR_INCOMPLETE,
+    STREAMING_INDICATOR,
+    EDIT_DELAY_SECONDS,
+    THINKING_SINCE_TEMPLATE,
+    DONE_THINKING_PREFIX,
+    FOOTER_STREAMING_SUFFIX,
+)
+from .messages import MsgNode
+from .reasoning import ThinkBlockRedactor
+
+
+async def stream_and_reply(
+    *,
+    new_msg: discord.Message,
+    openai_client: AsyncOpenAI,
+    model: str,
+    display_model: str,
+    messages: list[ChatCompletionMessageParam],
+    embed: discord.Embed,
+    use_plain_responses: bool,
+    max_message_length: int,
+    extra_headers: dict[str, Any] | None,
+    extra_query: dict[str, Any] | None,
+    extra_body: dict[str, Any] | None,
+    msg_nodes: dict[int, MsgNode],
+) -> tuple[list[discord.Message], list[str]]:
+    """Stream chat completion and update Discord messages."""
+
+    response_msgs: list[discord.Message] = []
+    response_contents: list[str] = []
+    last_edit_time: float = 0.0
+
+    # Timing state
+    start_perf = time.perf_counter()
+    output_start_perf: float | None = None
+    reasoning_started: bool = False
+    reasoning_start_perf: float | None = None
+    reasoning_start_unix: int | None = None
+
+    # Accumulated visible output
+    response_full_text: str = ""
+
+    # Simple think block redactor for <think> tags only
+    think_redactor = ThinkBlockRedactor()
+
+    try:
+        # If warnings exist and we're using embeds, send them as a separate message first
+        if (not use_plain_responses) and getattr(embed, "fields", None):
+            try:
+                if len(embed.fields) > 0:
+                    warn_msg = await new_msg.reply(embed=embed, silent=True)
+                    response_msgs.append(warn_msg)
+                    msg_nodes[warn_msg.id] = MsgNode(parent_msg=new_msg)
+                    await msg_nodes[warn_msg.id].lock.acquire()
+            except Exception:
+                pass
+
+        async with new_msg.channel.typing():
+            # Correct usage: await create() to get an async iterator
+            stream = await openai_client.chat.completions.create(
+                model=model,
+                messages=messages[::-1],
+                stream=True,
+                extra_headers=extra_headers,
+                extra_query=extra_query,
+                extra_body=extra_body,
+            )
+
+            async for event in stream:
+                # Some providers send heartbeat/meta events without choices
+                if not hasattr(event, "choices") or not event.choices:
+                    continue
+
+                choice = event.choices[0]
+                # Extract raw content delta if present
+                raw_delta = getattr(getattr(choice, "delta", None), "content", "") or ""
+                visible_delta = ""
+
+                if raw_delta:
+                    visible_delta, saw_thinking = think_redactor.process(raw_delta)
+                    if saw_thinking and not reasoning_started:
+                        reasoning_started = True
+                        reasoning_start_perf = time.perf_counter()
+                        reasoning_start_unix = int(time.time())
+
+                # On finish, flush any buffered think text even if no content in this chunk
+                if getattr(choice, "finish_reason", None) is not None:
+                    tail = think_redactor.flush()
+                    if tail:
+                        visible_delta += tail
+
+                # Record first visible output time
+                if output_start_perf is None and visible_delta:
+                    output_start_perf = time.perf_counter()
+
+                # Skip if no visible content and not finishing AND no thinking detected
+                if (
+                    not visible_delta
+                    and getattr(choice, "finish_reason", None) is None
+                    and not reasoning_started
+                ):
+                    continue
+
+                # Accumulate visible output
+                if visible_delta:
+                    response_full_text += visible_delta
+
+                # Update Discord messages
+                if not use_plain_responses:
+                    ready_to_edit = (
+                        time.monotonic() - last_edit_time
+                    ) >= EDIT_DELAY_SECONDS
+                    is_final_edit = getattr(choice, "finish_reason", None) is not None
+
+                    if ready_to_edit or is_final_edit:
+                        # Build header for the first message only
+                        header = ""
+                        if reasoning_started:
+                            if (
+                                output_start_perf is None
+                                and reasoning_start_unix is not None
+                            ):
+                                header = THINKING_SINCE_TEMPLATE.replace(
+                                    "{ts}", str(reasoning_start_unix)
+                                )
+                            elif (
+                                output_start_perf is not None
+                                and reasoning_start_perf is not None
+                            ):
+                                elapsed_head = output_start_perf - reasoning_start_perf
+                                mins, secs = divmod(int(elapsed_head), 60)
+                                time_str = f"{mins}m {secs}s"
+                                header = DONE_THINKING_PREFIX.replace(
+                                    "{time}", time_str
+                                )
+
+                        # Build full body including streaming indicator (only for the last segment)
+                        body_now = response_full_text
+                        if not is_final_edit:
+                            body_now = body_now + STREAMING_INDICATOR
+
+                        # Split content across multiple messages so nothing is overwritten
+                        split_descriptions: list[str] = []
+                        remaining = body_now.lstrip("\n")
+                        # First message description
+                        newline_len = 1 if header and remaining else 0
+                        first_capacity = max(
+                            0, max_message_length - len(header) - newline_len
+                        )
+                        first_chunk = remaining[:first_capacity]
+                        desc0 = (
+                            header
+                            + ("\n" if header and first_chunk else "")
+                            + first_chunk
+                        )
+                        split_descriptions.append(desc0)
+                        remaining = remaining[len(first_chunk) :]
+                        # Subsequent messages descriptions
+                        while remaining:
+                            chunk = remaining[:max_message_length]
+                            split_descriptions.append(chunk)
+                            remaining = remaining[len(chunk) :]
+
+                        # Compute live tokens/sec estimate for footer
+                        try:
+                            now = time.perf_counter()
+                            elapsed_live = (
+                                now - (output_start_perf or start_perf)
+                            ) or 1e-6
+                            approx_tokens_live = len(response_full_text) / 4.0
+                            tps_live = (
+                                approx_tokens_live / elapsed_live
+                                if elapsed_live > 0
+                                else 0.0
+                            )
+                        except Exception:
+                            tps_live = 0.0
+                        footer_live = f"{display_model} • {tps_live:.1f} tok/s{FOOTER_STREAMING_SUFFIX}"
+
+                        # Create or edit messages to match descriptions
+                        for i, desc in enumerate(split_descriptions):
+                            embed_i = discord.Embed(
+                                description=desc,
+                                color=(
+                                    EMBED_COLOR_COMPLETE
+                                    if is_final_edit
+                                    else EMBED_COLOR_INCOMPLETE
+                                ),
+                            )
+                            embed_i.set_footer(text=footer_live)
+
+                            if i < len(response_msgs):
+                                # Edit existing message
+                                await response_msgs[i].edit(embed=embed_i)
+                            else:
+                                # Create a new message, chained to the last one for readability
+                                reply_to = (
+                                    new_msg if not response_msgs else response_msgs[-1]
+                                )
+                                msg = await reply_to.reply(embed=embed_i, silent=True)
+                                response_msgs.append(msg)
+                                msg_nodes[msg.id] = MsgNode(parent_msg=new_msg)
+                                await msg_nodes[msg.id].lock.acquire()
+
+                        last_edit_time = time.monotonic()
+
+                # Break after final finish chunk
+                if getattr(choice, "finish_reason", None) is not None:
+                    break
+
+    except Exception as e:
+        # Handle any streaming errors
+        error_embed = discord.Embed(
+            description=f"Error during streaming: {str(e)}", color=discord.Color.red()
+        )
+        if response_msgs:
+            await response_msgs[-1].edit(embed=error_embed)
+        else:
+            await new_msg.reply(embed=error_embed, silent=True)
+        raise
+
+    # Handle plain text responses (split into multiple messages respecting max length)
+    if use_plain_responses:
+        content = response_full_text
+        remaining = content
+        while remaining:
+            chunk = remaining[:max_message_length]
+            reply_to_msg = new_msg if not response_msgs else response_msgs[-1]
+            response_msg = await reply_to_msg.reply(content=chunk, suppress_embeds=True)
+            response_msgs.append(response_msg)
+            msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
+            await msg_nodes[response_msg.id].lock.acquire()
+            remaining = remaining[len(chunk) :]
+
+    # Finalize: compute tok/s and update the first message with final footer
+    try:
+        if response_msgs:
+            end_perf = time.perf_counter()
+            elapsed = (end_perf - (output_start_perf or start_perf)) or 1e-6
+
+            approx_tokens = len(response_full_text) / 4.0
+            tps = approx_tokens / elapsed if elapsed > 0 else 0.0
+
+            footer_text = f"{display_model} • {tps:.1f} tok/s"
+
+            # Build the final set of message descriptions (split across messages)
+            header = ""
+            if reasoning_started:
+                if output_start_perf is None and reasoning_start_unix is not None:
+                    header = THINKING_SINCE_TEMPLATE.replace(
+                        "{ts}", str(reasoning_start_unix)
+                    )
+                elif output_start_perf is not None and reasoning_start_perf is not None:
+                    elapsed_head = output_start_perf - reasoning_start_perf
+                    mins, secs = divmod(int(elapsed_head), 60)
+                    time_str = f"{mins}m {secs}s"
+                    header = DONE_THINKING_PREFIX.replace("{time}", time_str)
+
+            remaining = response_full_text.lstrip("\n")
+            final_descriptions: list[str] = []
+            newline_len = 1 if header and remaining else 0
+            first_capacity = max(0, max_message_length - len(header) - newline_len)
+            first_chunk = remaining[:first_capacity]
+            desc0 = header + ("\n" if header and first_chunk else "") + first_chunk
+            final_descriptions.append(desc0)
+            remaining = remaining[len(first_chunk) :]
+            while remaining:
+                chunk = remaining[:max_message_length]
+                final_descriptions.append(chunk)
+                remaining = remaining[len(chunk) :]
+
+            # Apply final embeds and footer to all messages
+            for i, desc in enumerate(final_descriptions):
+                color = EMBED_COLOR_COMPLETE
+                embed_i = discord.Embed(description=desc, color=color)
+                # Add '(cont.)' marker on continuation messages for clarity
+                footer_text_i = footer_text + (" • (cont.)" if i > 0 else "")
+                embed_i.set_footer(text=footer_text_i)
+                if i < len(response_msgs):
+                    await response_msgs[i].edit(embed=embed_i)
+                else:
+                    reply_to = new_msg if not response_msgs else response_msgs[-1]
+                    msg = await reply_to.reply(embed=embed_i, silent=True)
+                    response_msgs.append(msg)
+                    msg_nodes[msg.id] = MsgNode(parent_msg=new_msg)
+                    await msg_nodes[msg.id].lock.acquire()
+    except Exception:
+        pass
+
+    # Return a single consolidated content segment
+    response_contents = [response_full_text]
+    return response_msgs, response_contents

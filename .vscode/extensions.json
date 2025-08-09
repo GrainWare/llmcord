@@ -1,0 +1,10 @@
+{
+    "recommendations": [
+      "detachhead.basedpyright",
+      "charliermarsh.ruff",
+      "njpwerner.autodocstring",
+      "usernamehw.errorlens",
+      "redhat.vscode-yaml",
+      "davidanson.vscode-markdownlint"
+    ]
+  }
