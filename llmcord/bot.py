@@ -188,6 +188,10 @@ async def on_message(new_msg: discord.Message) -> None:
         else (EMBED_DESCRIPTION_MAX_LENGTH - len(STREAMING_INDICATOR))
     )
 
+    # Optional safety controls
+    block_response_regex = cfg.get("block_response_regex")
+    reply_length_cap = cfg.get("reply_length_cap")
+
     try:
         response_msgs, response_contents = await stream_and_reply(
             new_msg=new_msg,
@@ -202,6 +206,8 @@ async def on_message(new_msg: discord.Message) -> None:
             extra_query=extra_query,
             extra_body=extra_body,
             msg_nodes=msg_nodes,
+            block_response_regex=block_response_regex,
+            reply_length_cap=reply_length_cap,
         )
     except Exception:
         logging.exception("Error while generating response")

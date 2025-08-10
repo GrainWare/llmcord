@@ -12,6 +12,17 @@ use_plain_responses: false
 allow_dms: true
 experimental_message_formatting: false
 
+# Optional safety controls:
+# If set to a non-empty regex string, any outgoing bot message that matches will be
+# aborted: partial replies are deleted and an error message is sent instead.
+# Example: 'https?://[^\s]+' to block URLs. Leave blank or omit to disable.
+block_response_regex: 
+
+# Optional hard cap on total reply length (in characters). When reached during
+# generation, the bot will stop, delete partial replies, and send an error.
+# Set to 0 or omit to disable.
+reply_length_cap: 
+
 permissions:
   users:
     admin_ids: []

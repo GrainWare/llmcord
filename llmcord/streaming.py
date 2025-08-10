@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from typing import Any
+import re
 
 import discord
 from openai import AsyncOpenAI
@@ -34,6 +35,8 @@ async def stream_and_reply(
     extra_query: dict[str, Any] | None,
     extra_body: dict[str, Any] | None,
     msg_nodes: dict[int, MsgNode],
+    block_response_regex: str | None = None,
+    reply_length_cap: int | None = None,
 ) -> tuple[list[discord.Message], list[str]]:
     """Stream chat completion and update Discord messages."""
 
@@ -53,6 +56,37 @@ async def stream_and_reply(
 
     # Simple think block redactor for <think> tags only
     think_redactor = ThinkBlockRedactor()
+
+    # Optional regex to block outgoing messages
+    regex_pattern: re.Pattern[str] | None = None
+    if block_response_regex:
+        try:
+            regex_pattern = re.compile(block_response_regex)
+        except Exception:
+            # If the regex is invalid, ignore it gracefully
+            regex_pattern = None
+
+    async def abort_and_send_error(error_text: str) -> None:
+        """Delete any messages we created, release locks, and notify the user."""
+        # Delete any partial response messages (including warnings embed if present)
+        for msg in list(response_msgs):
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+            try:
+                node = msg_nodes.get(msg.id)
+                if node is not None and node.lock.locked():
+                    node.lock.release()
+                msg_nodes.pop(msg.id, None)
+            except Exception:
+                pass
+        response_msgs.clear()
+        try:
+            error_embed = discord.Embed(description=error_text, color=discord.Color.red())
+            await new_msg.reply(embed=error_embed, silent=True)
+        except Exception:
+            pass
 
     try:
         # If warnings exist and we're using embeds, send them as a separate message first
@@ -116,6 +150,14 @@ async def stream_and_reply(
                 if visible_delta:
                     response_full_text += visible_delta
 
+                # Enforce global reply length cap (across the whole reply), if configured
+                if reply_length_cap is not None and reply_length_cap > 0:
+                    if len(response_full_text) >= reply_length_cap:
+                        await abort_and_send_error(
+                            f"Reply length exceeded the configured cap ({reply_length_cap} characters)."
+                        )
+                        return [], []
+
                 # Update Discord messages
                 if not use_plain_responses:
                     ready_to_edit = (
@@ -171,6 +213,20 @@ async def stream_and_reply(
                             chunk = remaining[:max_message_length]
                             split_descriptions.append(chunk)
                             remaining = remaining[len(chunk) :]
+
+                        # If a block regex is configured, block immediately if any outgoing message
+                        # (embed description) would match it.
+                        if regex_pattern is not None:
+                            try:
+                                for desc in split_descriptions:
+                                    if regex_pattern.search(desc or "") is not None:
+                                        await abort_and_send_error(
+                                            "Response blocked by server policy."
+                                        )
+                                        return [], []
+                            except Exception:
+                                # If anything goes wrong applying the regex, fail open (continue)
+                                pass
 
                         # Compute live tokens/sec estimate for footer
                         try:
@@ -236,6 +292,14 @@ async def stream_and_reply(
         remaining = content
         while remaining:
             chunk = remaining[:max_message_length]
+            # If a block regex is configured, block immediately if any outgoing chunk would match it.
+            if regex_pattern is not None:
+                try:
+                    if regex_pattern.search(chunk or "") is not None:
+                        await abort_and_send_error("Response blocked by server policy.")
+                        return [], []
+                except Exception:
+                    pass
             reply_to_msg = new_msg if not response_msgs else response_msgs[-1]
             response_msg = await reply_to_msg.reply(content=chunk, suppress_embeds=True)
             response_msgs.append(response_msg)
