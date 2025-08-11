@@ -221,6 +221,8 @@ async def on_message(new_msg: discord.Message) -> None:
                     extra_query=extra_query,
                     extra_body=extra_body,
                     msg_nodes=msg_nodes,
+                    block_response_regex=cfg.get("block_response_regex"),
+                    reply_length_cap=cfg.get("reply_length_cap"),
                 )
             except asyncio.CancelledError:
                 logging.info(f"Task for message {new_msg.id} was cancelled.")

@@ -220,6 +220,11 @@ async def stream_and_reply(
                             try:
                                 for desc in split_descriptions:
                                     if regex_pattern.search(desc or "") is not None:
+                                        try:
+                                            print(f"Blocked: {desc}")
+                                            print(f"Full text: {response_full_text}")
+                                        except Exception:
+                                            pass
                                         await abort_and_send_error(
                                             "Response blocked by server policy."
                                         )
@@ -296,6 +301,11 @@ async def stream_and_reply(
             if regex_pattern is not None:
                 try:
                     if regex_pattern.search(chunk or "") is not None:
+                        try:
+                            print(f"Blocked: {chunk}")
+                            print(f"Full text: {content}")
+                        except Exception:
+                            pass
                         await abort_and_send_error("Response blocked by server policy.")
                         return [], []
                 except Exception:
