@@ -31,6 +31,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(mes
 config = get_config()
 curr_model = next(iter(config["models"]))
 msg_nodes: dict[int, MsgNode] = {}
+running_tasks: dict[int, asyncio.Task] = {}
 
 # Discord bot setup
 intents = discord.Intents.all()
@@ -42,6 +43,28 @@ discord_bot = commands.Bot(intents=intents, activity=activity, command_prefix=""
 # Attachment handling
 httpx_client: httpx.AsyncClient | None = None
 
+@discord_bot.tree.command(name="stop", description="Stops all current messages in case they loop") # Admin command to "kill" all messages being worked on
+async def stop_command(interaction: discord.Interaction) -> None:
+    # Permission check
+    if interaction.user.id not in config["permissions"]["users"]["admin_ids"]:
+        await interaction.response.send_message("No permission.", ephemeral=True)
+        return
+
+    if not running_tasks:
+        await interaction.response.send_message("No running tasks to stop.", ephemeral=True)
+        return
+
+    for task in list(running_tasks.values()):
+        task.cancel()
+
+    for task in list(running_tasks.values()):
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    running_tasks.clear()
+    await interaction.response.send_message("All running tasks have been cancelled.", ephemeral=True)
 
 @discord_bot.tree.command(name="model", description="View or switch the current model")
 async def model_command(interaction: discord.Interaction, model: str) -> None:
@@ -100,131 +123,133 @@ async def on_ready() -> None:
         )
     await discord_bot.tree.sync()
 
-
 @discord_bot.event
 async def on_message(new_msg: discord.Message) -> None:
-    assert discord_bot.user is not None
-
-    is_dm = new_msg.channel.type == discord.ChannelType.private
     if new_msg.author.bot:
         return
-    if not is_dm and discord_bot.user not in new_msg.mentions:
-        return
+    
+    async def _handler():
+        try:
+            assert discord_bot.user is not None
 
-    cfg = await asyncio.to_thread(get_config)
-    if not is_authorized(new_msg=new_msg, config=cfg, is_dm=is_dm):
-        return
+            is_dm = new_msg.channel.type == discord.ChannelType.private
+            if not is_dm and discord_bot.user not in new_msg.mentions:
+                return
 
-    provider_slash_model = curr_model
-    provider, model = provider_slash_model.removesuffix(":vision").split("/", 1)
+            cfg = await asyncio.to_thread(get_config)
+            if not is_authorized(new_msg=new_msg, config=cfg, is_dm=is_dm):
+                return
 
-    provider_config = cfg["providers"][provider]
-    base_url = provider_config["base_url"]
-    api_key = provider_config.get("api_key", "sk-no-key-required")
-    openai_client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+            provider_slash_model = curr_model
+            provider, model = provider_slash_model.removesuffix(":vision").split("/", 1)
 
-    model_parameters = cfg["models"].get(provider_slash_model, None)
+            provider_config = cfg["providers"][provider]
+            base_url = provider_config["base_url"]
+            api_key = provider_config.get("api_key", "sk-no-key-required")
+            openai_client = AsyncOpenAI(base_url=base_url, api_key=api_key)
 
-    extra_headers = provider_config.get("extra_headers", None)
-    extra_query = provider_config.get("extra_query", None)
-    extra_body = (provider_config.get("extra_body", None) or {}) | (
-        model_parameters or {}
-    )
+            model_parameters = cfg["models"].get(provider_slash_model, None)
 
-    try:
-        existing_stream_options = cast(
-            dict[str, Any], extra_body.get("stream_options", {})
-        )
-    except Exception:
-        existing_stream_options = {}
-    extra_body["stream_options"] = {**existing_stream_options, "include_usage": True}
+            extra_headers = provider_config.get("extra_headers", None)
+            extra_query = provider_config.get("extra_query", None)
+            extra_body = (provider_config.get("extra_body", None) or {}) | (model_parameters or {})
 
-    accept_images = any(x in provider_slash_model.lower() for x in VISION_MODEL_TAGS)
-    accept_usernames = any(
-        x in provider_slash_model.lower() for x in PROVIDERS_SUPPORTING_USERNAMES
-    )
+            try:
+                existing_stream_options = cast(dict[str, Any], extra_body.get("stream_options", {}))
+            except Exception:
+                existing_stream_options = {}
+            extra_body["stream_options"] = {**existing_stream_options, "include_usage": True}
 
-    max_text = cfg.get("max_text", 100000)
-    max_images = cfg.get("max_images", 5) if accept_images else 0
-    max_messages = cfg.get("max_messages", 25)
+            accept_images = any(x in provider_slash_model.lower() for x in VISION_MODEL_TAGS)
+            accept_usernames = any(x in provider_slash_model.lower() for x in PROVIDERS_SUPPORTING_USERNAMES)
 
-    assert httpx_client is not None, "HTTPX client not initialized"
-    messages, user_warnings = await build_conversation_context(
-        new_msg=new_msg,
-        bot_user=discord_bot.user,
-        accept_images=accept_images,
-        accept_usernames=accept_usernames,
-        experimental_message_formatting=cfg.get("experimental_message_formatting", False),
-        max_text=max_text,
-        max_images=max_images,
-        max_messages=max_messages,
-        msg_nodes=msg_nodes,
-        httpx_client=httpx_client,
-    )
+            max_text = cfg.get("max_text", 100000)
+            max_images = cfg.get("max_images", 5) if accept_images else 0
+            max_messages = cfg.get("max_messages", 25)
 
-    logging.info(
-        f"Message received (user ID: {new_msg.author.id}, attachments: {len(new_msg.attachments)}, conversation length: {len(messages)}):\n{new_msg.content}"
-    )
-
-    if system_prompt := format_system_prompt(
-        cfg.get("system_prompt", ""),
-        accept_usernames=accept_usernames,
-        users_listing=(
-            "\n".join(
-                [
-                    f"username: {member.name}, nickname: {member.display_name}, mention: <@{member.id}>"
-                    for member in (new_msg.guild.members if new_msg.guild else [])
-                ]
+            assert httpx_client is not None, "HTTPX client not initialized"
+            messages, user_warnings = await build_conversation_context(
+                new_msg=new_msg,
+                bot_user=discord_bot.user,
+                accept_images=accept_images,
+                accept_usernames=accept_usernames,
+                experimental_message_formatting=cfg.get("experimental_message_formatting", False),
+                max_text=max_text,
+                max_images=max_images,
+                max_messages=max_messages,
+                msg_nodes=msg_nodes,
+                httpx_client=httpx_client,
             )
-        ),
-    ):
-        messages.append(dict(role="system", content=system_prompt))
 
-    embed = build_warnings_embed(user_warnings)
-    use_plain_responses = cfg.get("use_plain_responses", False)
-    max_message_length = (
-        2000
-        if use_plain_responses
-        else (EMBED_DESCRIPTION_MAX_LENGTH - len(STREAMING_INDICATOR))
-    )
+            logging.info(
+                f"Message received (user ID: {new_msg.author.id}, attachments: {len(new_msg.attachments)}, conversation length: {len(messages)}):\n{new_msg.content}"
+            )
 
-    # Optional safety controls
-    block_response_regex = cfg.get("block_response_regex")
-    reply_length_cap = cfg.get("reply_length_cap")
+            if system_prompt := format_system_prompt(
+                cfg.get("system_prompt", ""),
+                accept_usernames=accept_usernames,
+                users_listing=(
+                    "\n".join(
+                        [
+                            f"username: {member.name}, nickname: {member.display_name}, mention: <@{member.id}>"
+                            for member in (new_msg.guild.members if new_msg.guild else [])
+                        ]
+                    )
+                ),
+            ):
+                messages.append(dict(role="system", content=system_prompt))
 
-    try:
-        response_msgs, response_contents = await stream_and_reply(
-            new_msg=new_msg,
-            openai_client=openai_client,
-            model=model,
-            display_model=provider_slash_model,
-            messages=cast(list[ChatCompletionMessageParam], messages),
-            embed=embed,
-            use_plain_responses=use_plain_responses,
-            max_message_length=max_message_length,
-            extra_headers=extra_headers,
-            extra_query=extra_query,
-            extra_body=extra_body,
-            msg_nodes=msg_nodes,
-            block_response_regex=block_response_regex,
-            reply_length_cap=reply_length_cap,
-        )
-    except Exception:
-        logging.exception("Error while generating response")
-        return
+            embed = build_warnings_embed(user_warnings)
+            use_plain_responses = cfg.get("use_plain_responses", False)
+            max_message_length = (
+                2000
+                if use_plain_responses
+                else (EMBED_DESCRIPTION_MAX_LENGTH - len(STREAMING_INDICATOR))
+            )
 
-    for response_msg in response_msgs:
-        msg_nodes[response_msg.id].text = "".join(response_contents)
-        msg_nodes[response_msg.id].lock.release()
+            try:
+                response_msgs, response_contents = await stream_and_reply(
+                    new_msg=new_msg,
+                    openai_client=openai_client,
+                    model=model,
+                    display_model=provider_slash_model,
+                    messages=cast(list[ChatCompletionMessageParam], messages),
+                    embed=embed,
+                    use_plain_responses=use_plain_responses,
+                    max_message_length=max_message_length,
+                    extra_headers=extra_headers,
+                    extra_query=extra_query,
+                    extra_body=extra_body,
+                    msg_nodes=msg_nodes,
+                )
+            except asyncio.CancelledError:
+                logging.info(f"Task for message {new_msg.id} was cancelled.")
+                raise
+            except Exception:
+                logging.exception("Error while generating response")
+                return
 
-    if (num_nodes := len(msg_nodes)) > MAX_MESSAGE_NODES:
-        for msg_id in sorted(msg_nodes.keys())[: num_nodes - MAX_MESSAGE_NODES]:
-            node = msg_nodes.get(msg_id)
-            if node is None:
-                continue
-            async with node.lock:
-                msg_nodes.pop(msg_id, None)
+            for response_msg in response_msgs:
+                msg_nodes[response_msg.id].text = "".join(response_contents)
+                msg_nodes[response_msg.id].lock.release()
 
+            if (num_nodes := len(msg_nodes)) > MAX_MESSAGE_NODES:
+                for msg_id in sorted(msg_nodes.keys())[: num_nodes - MAX_MESSAGE_NODES]:
+                    node = msg_nodes.get(msg_id)
+                    if node is None:
+                        continue
+                    async with node.lock:
+                        msg_nodes.pop(msg_id, None)
+
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.exception("Unexpected error in on_message handler")
+
+    # Basiclly wrapped this entire thing in a task so it can be shutdown with a command
+    task = asyncio.create_task(_handler())
+    running_tasks[new_msg.id] = task
+    task.add_done_callback(lambda t: running_tasks.pop(new_msg.id, None))
 
 async def main() -> None:
     global httpx_client
