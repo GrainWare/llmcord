@@ -14,8 +14,8 @@ dependencies = [
 [tool.uv]
 package = true
 
-[project.scripts]
-llmcord = "llmcord.bot:_run"
+[tool.setuptools.packages.find]
+exclude = ["assets*"]
 
 [dependency-groups]
 dev = [
