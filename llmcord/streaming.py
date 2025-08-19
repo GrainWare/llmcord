@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, Awaitable, cast
+import inspect
 import re
 
 import discord
@@ -66,8 +67,37 @@ async def stream_and_reply(
             # If the regex is invalid, ignore it gracefully
             regex_pattern = None
 
+    # Keep a handle to the underlying OpenAI stream so we can close it early on abort
+    stream: Any | None = None
+
     async def abort_and_send_error(error_text: str) -> None:
         """Delete any messages we created, release locks, and notify the user."""
+        # Proactively close the OpenAI stream if it's still open
+        try:
+            if stream is not None:
+                try:
+                    # Best-effort close; different providers may implement close differently
+                    close_func = getattr(stream, "close", None)
+                    if callable(close_func):
+                        maybe_awaitable = close_func()
+                        if inspect.isawaitable(maybe_awaitable):
+                            await cast(Awaitable[object], maybe_awaitable)
+
+                    # Some variants expose an underlying HTTP response with close()/aclose()
+                    response_obj = getattr(stream, "response", None)
+                    if response_obj is not None:
+                        aclose_func = getattr(response_obj, "aclose", None)
+                        close_func = getattr(response_obj, "close", None)
+                        if callable(aclose_func):
+                            maybe_awaitable = aclose_func()
+                            if inspect.isawaitable(maybe_awaitable):
+                                await cast(Awaitable[object], maybe_awaitable)
+                        elif callable(close_func):
+                            close_func()
+                except Exception:
+                    pass
+        except Exception:
+            pass
         # Delete any partial response messages (including warnings embed if present)
         for msg in list(response_msgs):
             try:
@@ -149,6 +179,16 @@ async def stream_and_reply(
                 # Accumulate visible output
                 if visible_delta:
                     response_full_text += visible_delta
+
+                # If a block regex is configured, abort immediately if the accumulated
+                # outgoing text would match it (works for both embed and plain modes).
+                if regex_pattern is not None:
+                    try:
+                        if regex_pattern.search(response_full_text or "") is not None:
+                            await abort_and_send_error("Response blocked by server policy.")
+                            return [], []
+                    except Exception:
+                        pass
 
                 # Enforce global reply length cap (across the whole reply), if configured
                 if reply_length_cap is not None and reply_length_cap > 0:
