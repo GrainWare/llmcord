@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from typing import Any, Awaitable, cast
 import inspect
+import logging
 import re
 
 import discord
@@ -70,6 +71,13 @@ async def stream_and_reply(
     # Keep a handle to the underlying OpenAI stream so we can close it early on abort
     stream: Any | None = None
 
+    def _truncate_for_log(text: str, limit: int = 200) -> str:
+        if text is None:
+            return ""
+        if len(text) <= limit:
+            return text
+        return text[:limit] + "… (truncated)"
+
     async def abort_and_send_error(error_text: str) -> None:
         """Delete any messages we created, release locks, and notify the user."""
         # Proactively close the OpenAI stream if it's still open
@@ -113,7 +121,9 @@ async def stream_and_reply(
                 pass
         response_msgs.clear()
         try:
-            error_embed = discord.Embed(description=error_text, color=discord.Color.red())
+            error_embed = discord.Embed(
+                description=error_text, color=discord.Color.red()
+            )
             await new_msg.reply(embed=error_embed, silent=True)
         except Exception:
             pass
@@ -184,8 +194,20 @@ async def stream_and_reply(
                 # outgoing text would match it (works for both embed and plain modes).
                 if regex_pattern is not None:
                     try:
-                        if regex_pattern.search(response_full_text or "") is not None:
-                            await abort_and_send_error("Response blocked by server policy.")
+                        match_obj = regex_pattern.search(response_full_text or "")
+                        if match_obj is not None:
+                            try:
+                                logging.info(
+                                    "Blocked by regex during stream accumulation | model=%s | matched=%r | preview=%r",
+                                    display_model,
+                                    _truncate_for_log(match_obj.group(0), 120),
+                                    _truncate_for_log(response_full_text, 200),
+                                )
+                            except Exception:
+                                pass
+                            await abort_and_send_error(
+                                "Response blocked by server policy."
+                            )
                             return [], []
                     except Exception:
                         pass
@@ -259,10 +281,17 @@ async def stream_and_reply(
                         if regex_pattern is not None:
                             try:
                                 for desc in split_descriptions:
-                                    if regex_pattern.search(desc or "") is not None:
+                                    match_obj = regex_pattern.search(desc or "")
+                                    if match_obj is not None:
                                         try:
-                                            print(f"Blocked: {desc}")
-                                            print(f"Full text: {response_full_text}")
+                                            logging.info(
+                                                "Blocked by regex before sending embed chunk | model=%s | matched=%r | preview=%r",
+                                                display_model,
+                                                _truncate_for_log(
+                                                    match_obj.group(0), 120
+                                                ),
+                                                _truncate_for_log(desc or "", 200),
+                                            )
                                         except Exception:
                                             pass
                                         await abort_and_send_error(
@@ -340,10 +369,15 @@ async def stream_and_reply(
             # If a block regex is configured, block immediately if any outgoing chunk would match it.
             if regex_pattern is not None:
                 try:
-                    if regex_pattern.search(chunk or "") is not None:
+                    match_obj = regex_pattern.search(chunk or "")
+                    if match_obj is not None:
                         try:
-                            print(f"Blocked: {chunk}")
-                            print(f"Full text: {content}")
+                            logging.info(
+                                "Blocked by regex before sending plain chunk | model=%s | matched=%r | preview=%r",
+                                display_model,
+                                _truncate_for_log(match_obj.group(0), 120),
+                                _truncate_for_log(chunk or "", 200),
+                            )
                         except Exception:
                             pass
                         await abort_and_send_error("Response blocked by server policy.")
