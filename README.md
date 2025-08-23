@@ -115,6 +115,8 @@ This project is a refactor and extension of the original `llmcord`. Major differ
 | **models** | Add the models you want to use in `<provider>/<model>: <parameters>` format (examples are included). When you run `/model` these models will show up as autocomplete suggestions.<br /><br />**Refer to each provider's documentation for supported parameters.**<br /><br />**The first model in your `models` list will be the default model at startup.**<br /><br />**Some vision models may need `:vision` added to the end of their name to enable image support.** |
 | **system_prompt** | Write anything you want to customize the bot's behavior!<br /><br />**Leave blank for no system prompt.**<br /><br />You can use placeholders:<br />- `{date}` and `{time}` insert the current date/time (based on your host's time zone).<br />- `{users}` expands to a newline-separated list of known server members in the format `username: <username>, nickname: <nickname>, mention: <@id>`. This is populated automatically when messages come from a guild. |
 
+Add `:vision` to the end of the model name to enable image support.
+
 3. Install the dependencies:
 
   > [!IMPORTANT]

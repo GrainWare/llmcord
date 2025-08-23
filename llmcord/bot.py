@@ -13,7 +13,6 @@ from openai.types.chat import ChatCompletionMessageParam
 
 from .config import get_config
 from .constants import (
-    VISION_MODEL_TAGS,
     PROVIDERS_SUPPORTING_USERNAMES,
     EMBED_DESCRIPTION_MAX_LENGTH,
     STREAMING_INDICATOR,
@@ -43,7 +42,10 @@ discord_bot = commands.Bot(intents=intents, activity=activity, command_prefix=""
 # Attachment handling
 httpx_client: httpx.AsyncClient | None = None
 
-@discord_bot.tree.command(name="stop", description="Stops all current messages in case they loop") # Admin command to "kill" all messages being worked on
+
+@discord_bot.tree.command(
+    name="stop", description="Stops all current messages in case they loop"
+)  # Admin command to "kill" all messages being worked on
 async def stop_command(interaction: discord.Interaction) -> None:
     # Permission check
     if interaction.user.id not in config["permissions"]["users"]["admin_ids"]:
@@ -51,7 +53,9 @@ async def stop_command(interaction: discord.Interaction) -> None:
         return
 
     if not running_tasks:
-        await interaction.response.send_message("No running tasks to stop.", ephemeral=True)
+        await interaction.response.send_message(
+            "No running tasks to stop.", ephemeral=True
+        )
         return
 
     for task in list(running_tasks.values()):
@@ -64,22 +68,31 @@ async def stop_command(interaction: discord.Interaction) -> None:
             pass
 
     running_tasks.clear()
-    await interaction.response.send_message("All running tasks have been cancelled.", ephemeral=True)
-    
+    await interaction.response.send_message(
+        "All running tasks have been cancelled.", ephemeral=True
+    )
 
-@discord_bot.tree.command(name="prompt", description="Sends the current prompt in the config.yaml file") # Admin command to send the current system_prompt (located within config.yaml)
-@discord.app_commands.describe(visibility="Choose whether the response is visable by others")
-async def prompt_command(interaction: discord.Interaction, visibility: Literal["public", "private"] = "private") -> None:        
+
+@discord_bot.tree.command(
+    name="prompt", description="Sends the current prompt in the config.yaml file"
+)  # Admin command to send the current system_prompt (located within config.yaml)
+@discord.app_commands.describe(
+    visibility="Choose whether the response is visable by others"
+)
+async def prompt_command(
+    interaction: discord.Interaction,
+    visibility: Literal["public", "private"] = "private",
+) -> None:
     # Permission check
     if interaction.user.id not in config["permissions"]["users"]["admin_ids"]:
         await interaction.response.send_message("No permission.", ephemeral=True)
-    
-    ephemeral = (visibility == "private")
-    
+
+    ephemeral = visibility == "private"
+
     await interaction.response.send_message(
-        f"```{config['system_prompt']}```",
-        ephemeral=ephemeral
-)
+        f"```{config['system_prompt']}```", ephemeral=ephemeral
+    )
+
 
 @discord_bot.tree.command(name="model", description="View or switch the current model")
 async def model_command(interaction: discord.Interaction, model: str) -> None:
@@ -138,11 +151,12 @@ async def on_ready() -> None:
         )
     await discord_bot.tree.sync()
 
+
 @discord_bot.event
 async def on_message(new_msg: discord.Message) -> None:
     if new_msg.author.bot:
         return
-    
+
     async def _handler():
         try:
             assert discord_bot.user is not None
@@ -167,16 +181,26 @@ async def on_message(new_msg: discord.Message) -> None:
 
             extra_headers = provider_config.get("extra_headers", None)
             extra_query = provider_config.get("extra_query", None)
-            extra_body = (provider_config.get("extra_body", None) or {}) | (model_parameters or {})
+            extra_body = (provider_config.get("extra_body", None) or {}) | (
+                model_parameters or {}
+            )
 
             try:
-                existing_stream_options = cast(dict[str, Any], extra_body.get("stream_options", {}))
+                existing_stream_options = cast(
+                    dict[str, Any], extra_body.get("stream_options", {})
+                )
             except Exception:
                 existing_stream_options = {}
-            extra_body["stream_options"] = {**existing_stream_options, "include_usage": True}
+            extra_body["stream_options"] = {
+                **existing_stream_options,
+                "include_usage": True,
+            }
 
-            accept_images = any(x in provider_slash_model.lower() for x in VISION_MODEL_TAGS)
-            accept_usernames = any(x in provider_slash_model.lower() for x in PROVIDERS_SUPPORTING_USERNAMES)
+            accept_images = curr_model.endswith(":vision")
+            accept_usernames = any(
+                x in provider_slash_model.lower()
+                for x in PROVIDERS_SUPPORTING_USERNAMES
+            )
 
             max_text = cfg.get("max_text", 100000)
             max_images = cfg.get("max_images", 5) if accept_images else 0
@@ -188,7 +212,9 @@ async def on_message(new_msg: discord.Message) -> None:
                 bot_user=discord_bot.user,
                 accept_images=accept_images,
                 accept_usernames=accept_usernames,
-                experimental_message_formatting=cfg.get("experimental_message_formatting", False),
+                experimental_message_formatting=cfg.get(
+                    "experimental_message_formatting", False
+                ),
                 max_text=max_text,
                 max_images=max_images,
                 max_messages=max_messages,
@@ -207,7 +233,9 @@ async def on_message(new_msg: discord.Message) -> None:
                     "\n".join(
                         [
                             f"username: {member.name}, nickname: {member.display_name}, mention: <@{member.id}>"
-                            for member in (new_msg.guild.members if new_msg.guild else [])
+                            for member in (
+                                new_msg.guild.members if new_msg.guild else []
+                            )
                         ]
                     )
                 ),
@@ -267,6 +295,7 @@ async def on_message(new_msg: discord.Message) -> None:
     task = asyncio.create_task(_handler())
     running_tasks[new_msg.id] = task
     task.add_done_callback(lambda t: running_tasks.pop(new_msg.id, None))
+
 
 async def main() -> None:
     global httpx_client

@@ -2,23 +2,6 @@ from __future__ import annotations
 
 import discord
 
-# Provider/model capability tags
-VISION_MODEL_TAGS: tuple[str, ...] = (
-    "claude",
-    "gemini",
-    "gemma",
-    "gpt-4",
-    "gpt-5",
-    "grok-4",
-    "llama",
-    "llava",
-    "mistral",
-    "o3",
-    "o4",
-    "vision",
-    "vl",
-)
-
 PROVIDERS_SUPPORTING_USERNAMES: tuple[str, ...] = ("openai",)
 
 
@@ -53,7 +36,6 @@ WARNING_UNSUPPORTED_ATTACHMENTS = "⚠️ Unsupported attachments"
 WARNING_ONLY_USING_LAST_TEMPLATE = "⚠️ Only using last {messages_count} message{s}"
 
 __all__ = [
-    "VISION_MODEL_TAGS",
     "PROVIDERS_SUPPORTING_USERNAMES",
     "EMBED_COLOR_COMPLETE",
     "EMBED_COLOR_INCOMPLETE",
