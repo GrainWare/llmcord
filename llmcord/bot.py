@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import discord
 from discord.app_commands import Choice
@@ -65,6 +65,21 @@ async def stop_command(interaction: discord.Interaction) -> None:
 
     running_tasks.clear()
     await interaction.response.send_message("All running tasks have been cancelled.", ephemeral=True)
+    
+
+@discord_bot.tree.command(name="prompt", description="Sends the current prompt in the config.yaml file") # Admin command to send the current system_prompt (located within config.yaml)
+@discord.app_commands.describe(visibility="Choose whether the response is visable by others")
+async def prompt_command(interaction: discord.Interaction, visibility: Literal["public", "private"] = "private") -> None:        
+    # Permission check
+    if interaction.user.id not in config["permissions"]["users"]["admin_ids"]:
+        await interaction.response.send_message("No permission.", ephemeral=True)
+    
+    ephemeral = (visibility == "private")
+    
+    await interaction.response.send_message(
+        f"```{config['system_prompt']}```",
+        ephemeral=ephemeral
+)
 
 @discord_bot.tree.command(name="model", description="View or switch the current model")
 async def model_command(interaction: discord.Interaction, model: str) -> None:
