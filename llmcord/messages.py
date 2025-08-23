@@ -86,16 +86,17 @@ async def build_conversation_context(
                     ]
                 )
 
-                curr_node.images = [
-                    dict(
-                        type="image_url",
-                        image_url=dict(
-                            url=f"data:{att.content_type};base64,{b64encode(resp.content).decode('utf-8')}"
-                        ),
-                    )
-                    for att, resp in zip(good_attachments, attachment_responses)
-                    if (att.content_type or "").startswith("image")
-                ]
+                if accept_images:
+                    curr_node.images = [
+                        dict(
+                            type="image_url",
+                            image_url=dict(
+                                url=f"data:{att.content_type};base64,{b64encode(resp.content).decode('utf-8')}"
+                            ),
+                        )
+                        for att, resp in zip(good_attachments, attachment_responses)
+                        if (att.content_type or "").startswith("image")
+                    ]
 
                 curr_node.role = "assistant" if curr_msg.author == bot_user else "user"
 
@@ -208,14 +209,28 @@ async def build_conversation_context(
                 # Optionally format user messages as "nickname: content"
                 if experimental_message_formatting and curr_node.role == "user":
                     try:
-                        display_name = getattr(getattr(curr_msg, "author", None), "display_name", None) or getattr(getattr(curr_msg, "author", None), "name", None) or "unknown"
+                        display_name = (
+                            getattr(
+                                getattr(curr_msg, "author", None), "display_name", None
+                            )
+                            or getattr(getattr(curr_msg, "author", None), "name", None)
+                            or "unknown"
+                        )
                     except Exception:
                         display_name = "unknown"
 
                     if isinstance(content, list):
-                        if content and isinstance(content[0], dict) and content[0].get("type") == "text":
+                        if (
+                            content
+                            and isinstance(content[0], dict)
+                            and content[0].get("type") == "text"
+                        ):
                             original_text = content[0].get("text", "")
-                            content[0]["text"] = f"{display_name}: {original_text}" if original_text else f"{display_name}:"
+                            content[0]["text"] = (
+                                f"{display_name}: {original_text}"
+                                if original_text
+                                else f"{display_name}:"
+                            )
                         # If no text part exists, leave images as-is
                     elif isinstance(content, str):
                         content = f"{display_name}: {content}"
