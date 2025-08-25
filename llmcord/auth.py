@@ -4,6 +4,23 @@ from typing import Any
 
 import discord
 
+def is_admin(new_msg: (discord.Member | discord.Interaction), config: dict[str, Any]) -> bool:
+    permissions = config["permissions"]
+
+    # Determine the user object
+    if isinstance(new_msg, discord.Interaction):
+        user = new_msg.user
+    else:  # assume discord.Member
+        user = new_msg
+
+    # Get role IDs safely; Interaction.user may not have roles if it's in a DM
+    role_ids = set(getattr(user, "roles", ()))
+    role_ids = {role.id for role in role_ids}
+
+    # Check user ID or role ID
+    user_is_admin = user.id in permissions["users"]["admin_ids"] or bool(role_ids & set(permissions["roles"]["admin_ids"]))
+
+    return user_is_admin
 
 def is_authorized(
     *, new_msg: discord.Message, config: dict[str, Any], is_dm: bool
@@ -24,8 +41,6 @@ def is_authorized(
 
     allow_dms = config.get("allow_dms", True)
     permissions = config["permissions"]
-    user_is_admin = new_msg.author.id in permissions["users"]["admin_ids"]
-
     (
         (allowed_user_ids, blocked_user_ids),
         (allowed_role_ids, blocked_role_ids),
@@ -43,7 +58,7 @@ def is_authorized(
         not allowed_user_ids if is_dm else not allowed_user_ids and not allowed_role_ids
     )
     is_good_user = (
-        user_is_admin
+        is_admin
         or allow_all_users
         or new_msg.author.id in allowed_user_ids
         or any(id in allowed_role_ids for id in role_ids)
@@ -56,7 +71,7 @@ def is_authorized(
 
     allow_all_channels = not allowed_channel_ids
     is_good_channel = (
-        user_is_admin or allow_dms
+        is_admin or allow_dms
         if is_dm
         else allow_all_channels or any(id in allowed_channel_ids for id in channel_ids)
     )

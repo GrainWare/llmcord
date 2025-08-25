@@ -20,7 +20,7 @@ from .constants import (
 )
 from .discord_utils import build_warnings_embed
 from .messages import MsgNode, build_conversation_context
-from .auth import is_authorized, format_system_prompt
+from .auth import is_authorized, is_admin, format_system_prompt
 from .streaming import stream_and_reply
 
 
@@ -48,24 +48,24 @@ httpx_client: httpx.AsyncClient | None = None
 )  # Admin command to "kill" all messages being worked on
 async def stop_command(interaction: discord.Interaction) -> None:
     # Permission check
-    if interaction.user.id not in config["permissions"]["users"]["admin_ids"]:
-        await interaction.response.send_message("No permission.", ephemeral=True)
+    if is_admin(interaction, config):
+        if not running_tasks:
+            await interaction.response.send_message(
+                "No running tasks to stop.", ephemeral=True
+            )
+            return
+
+        for task in list(running_tasks.values()):
+            task.cancel()
+
+        for task in list(running_tasks.values()):
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+    else:
+        await interaction.response.send_message("You don't have permission to stop tasks", ephemeral=True)
         return
-
-    if not running_tasks:
-        await interaction.response.send_message(
-            "No running tasks to stop.", ephemeral=True
-        )
-        return
-
-    for task in list(running_tasks.values()):
-        task.cancel()
-
-    for task in list(running_tasks.values()):
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
 
     running_tasks.clear()
     await interaction.response.send_message(
@@ -84,8 +84,14 @@ async def prompt_command(
     visibility: Literal["public", "private"] = "private",
 ) -> None:
     # Permission check
-    if interaction.user.id not in config["permissions"]["users"]["admin_ids"]:
-        await interaction.response.send_message("No permission.", ephemeral=True)
+    if is_admin(interaction, config):
+        ephemeral = visibility == "private"
+
+        await interaction.response.send_message(
+            f"```{config['system_prompt']}```", ephemeral=ephemeral
+        )
+    else:
+        await interaction.response.send_message("You don't have permission to view the prompt", ephemeral=True)
 
     ephemeral = visibility == "private"
 
@@ -101,7 +107,7 @@ async def model_command(interaction: discord.Interaction, model: str) -> None:
     if model == curr_model:
         output = f"Current model: `{curr_model}`"
     else:
-        if interaction.user.id in config["permissions"]["users"]["admin_ids"]:
+        if is_admin(interaction, config):
             # Ensure the requested model exists in the latest config to avoid runtime errors
             latest_cfg = await asyncio.to_thread(get_config)
             if model in latest_cfg.get("models", {}):

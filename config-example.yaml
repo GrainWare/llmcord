@@ -29,6 +29,7 @@ permissions:
     allowed_ids: []
     blocked_ids: []
   roles:
+    admin_ids: []
     allowed_ids: []
     blocked_ids: []
   channels:
